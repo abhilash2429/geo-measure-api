@@ -16,7 +16,7 @@ Built for the Aereo SDE intern take-home, "Geospatial File Measurement API".
 
 ## Setup
 
-Requirements: Python 3.12 and [uv](https://docs.astral.sh/uv/). GDAL ships inside the pyogrio and pyproj wheels, so there is nothing to install system-wide.
+You need Python 3.12 and [uv](https://docs.astral.sh/uv/). GDAL ships inside the pyogrio and pyproj wheels, so there's nothing to install system-wide.
 
 ```bash
 uv sync
@@ -241,7 +241,7 @@ Its measurements, rounded to 2 decimals in this table only (raw values are like 
 | P-001 | 250000.00 m², perimeter 2000.00 m | 250000.00 m² | LAEA centred on 17.1300N 78.2900E |
 | P-002 | 90000.00 m², perimeter 1200.00 m | 90000.00 m² | LAEA centred on 17.1300N 78.3000E |
 
-`deviation_pct` is `0.0` for all three. The source file is in UTM 44N, but Kothur is at 78.3°E, also near the zone's western edge, so these are measured in LAEA too. The source CRS and the measurement CRS are separate choices.
+`deviation_pct` is `0.0` for all three. The source file is in UTM 44N, but Kothur is at 78.3°E, also near the zone's western edge, so these get measured in LAEA too, whatever the source CRS says.
 
 To open the results in QGIS:
 
@@ -367,7 +367,7 @@ For each feature (`geo/measure.py`):
 
 ### CRS handling
 
-The measurement CRS is chosen separately for each feature. A file covering one village and a file covering a whole state get the same treatment, and each parcel is measured in a projection that suits where it is.
+I pick the measurement CRS per feature, so a file covering one village and a file covering a whole state get the same treatment: each parcel is measured in a projection that suits where it is.
 
 Source CRS:
 
@@ -381,7 +381,7 @@ Measurement CRS:
 1. Start with the UTM zone of the feature's centroid (UPS north of 84°N or south of 80°S), including the Norway and Svalbard zone exceptions. Survey teams already work in UTM in QGIS, so `EPSG:32644` in the output means something to them.
 2. Evaluate UTM's areal scale factor at every vertex with `pyproj.Proj.get_factors`. If any vertex is more than 0.1% off, switch to Lambert Azimuthal Equal Area on the WGS84 ellipsoid, centred on the feature's centroid. LAEA is equal-area by construction. This kicks in near zone edges, for features wider than a zone, and near the poles (UPS is about 1.2% off in area there).
 
-The KML sample shows both paths. Hyderabad is at about 78.4°E, in zone 44N, whose central meridian is 81°E. Roughly 2.6° west of the centre, UTM's areal scale is 1.00105, just over the limit, so the Hyderabad features report LAEA. The Eluru check plot sits on 81°E, where UTM's areal scale is 0.9992 (0.9996²), inside the tolerance, so it stays in `EPSG:32644`. Its area comes out at 9992 m² against 10,000 m² geodesic, and `deviation_pct` is -0.08. That's the zone-centre scale factor made visible, and it's the reason the threshold is a check at every vertex instead of trust in the zone. The tests cover UTM picks at the equator, 60°N and Sydney, and LAEA fallbacks for wide, polar and antimeridian-crossing features.
+The KML sample shows both paths. Hyderabad is at about 78.4°E, in zone 44N, whose central meridian is 81°E. Roughly 2.6° west of the centre, UTM's areal scale is 1.00105, just over the limit, so the Hyderabad features report LAEA. The Eluru check plot sits on 81°E, where UTM's areal scale is 0.9992 (0.9996²), inside the tolerance, so it stays in `EPSG:32644`. Its area comes out at 9992 m² against 10,000 m² geodesic (`deviation_pct` -0.08), which is the zone-centre scale factor showing through. The tests cover UTM picks at the equator, 60°N and Sydney, and LAEA fallbacks for wide, polar and antimeridian-crossing features.
 
 Densification: an edge is a straight line in the CRS the file was drawn in. If you reproject only its two endpoints, every projection bends it differently, and for a 20° polygon the UTM, LAEA and geodesic answers disagree by more than a percent. Densifying in the source CRS keeps the shape the author drew.
 
@@ -391,7 +391,7 @@ Geodesic cross-check: every measured feature carries `geodesic_area_m2` or `geod
 
 FastAPI over Django. This is one resource and a handful of endpoints. FastAPI gives typed request and response schemas and OpenAPI docs from the same Pydantic models. Django's admin, ORM and project structure would be weight I'd carry without using. SQLAlchemy 2.0 handles persistence.
 
-Synchronous processing in the request. The upload endpoint is a plain `def`, so FastAPI runs it on its threadpool and the event loop stays free. Survey-sized files (tens to a few thousand features) finish quickly, and the client gets the full result in one call with no polling. The two samples take about 0.7 s each. Status is still persisted (`PROCESSING`, then `COMPLETED` or `FAILED`), so the data model already fits an async design. For large files I'd move `process_upload` into a worker behind a queue, return `202 Accepted` with the file id, and have the client poll `GET /api/files/{id}/`. The pipeline itself would barely change.
+Synchronous processing in the request. The upload endpoint is a plain `def`, so FastAPI runs it on its threadpool and the event loop stays free. Survey-sized files (tens to a few thousand features) finish quickly. The two samples take about 0.7 s each, and the client gets the full result in one call with no polling. Status is still persisted (`PROCESSING`, then `COMPLETED` or `FAILED`), so the data model already fits an async design. For large files I'd move `process_upload` into a worker behind a queue, return `202 Accepted` with the file id, and have the client poll `GET /api/files/{id}/`. The pipeline itself would barely change.
 
 400 vs 422. A 400 means the request itself was wrong, and nothing is stored because there's nothing useful to keep. A 422 means the upload looked plausible but couldn't be read. The `FAILED` record stays so the user can see what they uploaded and why it failed.
 
@@ -403,7 +403,7 @@ Alternatives I considered for the measurement CRS:
 - Always geodesic. `pyproj.Geod` on the ellipsoid is exact for this purpose. The brief asks for measurement in a suitable projection, and survey teams think in projected coordinates, so the projection gives the official value and geodesic is the check.
 - A fixed national CRS. It ties the service to one country and still distorts toward the edges of a large one.
 
-Invalid polygons get reported and left alone. `make_valid` on a bowtie gives two triangles, and their combined area is a guess at what the surveyor meant. A service whose job is accurate numbers should return `INVALID_GEOMETRY` with the location of the self-intersection so the source gets fixed. The per-feature status means one bad polygon doesn't fail the whole file.
+Invalid polygons get reported and left alone. `make_valid` on a bowtie gives two triangles, and their combined area is a guess at what the surveyor meant. For a service whose job is accurate numbers, I'd rather return `INVALID_GEOMETRY` with the location of the self-intersection so the source gets fixed. The per-feature status means one bad polygon doesn't fail the whole file.
 
 Upload safety. The zip is never extracted blindly:
 
@@ -413,9 +413,9 @@ Upload safety. The zip is never extracted blindly:
 - Every `.shp` must have its `.shx` and `.dbf` (case-insensitive), and the error names exactly what's missing.
 - Client filenames are reduced to a safe basename before anything touches disk.
 
-Storage. SQLite with JSON columns for properties, GeoJSON geometry and the layer list, and an index on `(file_id, status)` for the filtered queries. It runs with zero setup for a reviewer, and the database URL is configurable.
+Storage. SQLite with JSON columns for properties, GeoJSON geometry and the layer list, and an index on `(file_id, status)` for the filtered queries. Zero setup for a reviewer, and the database URL is configurable.
 
-Beyond the brief: the GeoJSON export for QGIS, list and delete endpoints, filters and pagination on measurements, whole-file summary totals, per-layer metadata, the geodesic cross-check, Docker, CI on Linux and Windows, and the sample data.
+Extras I added beyond the brief: the GeoJSON export for QGIS, list and delete endpoints, filters and pagination on measurements, whole-file summary totals, per-layer metadata, the geodesic cross-check, Docker, CI on Linux and Windows, and the sample data.
 
 ## Learnings
 
@@ -425,7 +425,7 @@ KML `<ExtendedData><Data>` values are untyped strings. In the sample, `owner_id`
 
 The shapefile writer stores exterior rings clockwise, and `pyproj.Geod.geometry_area_perimeter` returns a signed area that is negative for clockwise rings. So polygons are oriented before the geodesic check. The same thing showed up in testing: comparing a geometry with its shapefile round-trip needed `normalize()` on both sides before an exact-equality check would pass.
 
-UTM isn't exact at the centre of a zone either. Its 0.9996 scale factor makes area at the central meridian about 0.08% low, which the Eluru plot shows, and at Hyderabad's latitude the error crosses +0.1% around 2.5° out. That's why I check the scale factor at every vertex instead of trusting the zone.
+UTM isn't exact at the centre of a zone either. Its 0.9996 scale factor makes area at the central meridian about 0.08% low, which the Eluru plot shows, and at Hyderabad's latitude the error crosses +0.1% around 2.5° out. Hence the per-vertex scale-factor check.
 
 PROJ doesn't always raise on coordinates a CRS can't represent. UTM hands back `inf` and Web Mercator clamps to latitude 90, both without an error. A round-trip back to the source CRS was the simplest reliable check I found.
 
